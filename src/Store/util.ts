@@ -20,93 +20,59 @@
 //   Alignment: string
 // }
 
-export function parseXMapFeature(line: string) {
+export function parseXMapLine(line: string) {
   var f = line.split('\t')
-  if (!f[1]) {
-    console.log(line)
-  }
 
   return {
-    seq_id: f[2],
+    xmap_entry_id: f[0],
     query_contig_id: f[1],
-    type: 'QueryContig',
+    refName: f[2],
+    correctedRefName: 'scaffold_' + f[2],
     qstart: +f[3],
     qend: +f[4],
     start: +f[5],
     end: +f[6],
-    score: null,
-    phase: 0,
     strand: f[7],
-    Confidence: +f[8],
+    confidence: +f[8],
+    hit_enum: f[9],
+    CIGAR: f[9],
+    qry_len: +f[10],
+    ref_len: +f[11],
+    label_channel: f[12],
     alignment: f[13],
     name: f[1],
-    attributes: { ID: [f[1]] },
   }
 }
 
-export type XMapFeature = ReturnType<typeof parseXMapFeature>
-
-var smap_field_names =
-  'SmapEntryID QryContigID RefcontigID1 RefcontigID2 QryStartPos QryEndPos RefStartPos RefEndPos Confidence Type XmapID1 XmapID2 LinkID QryStartIdx QryEndIdx RefStartIdx RefEndIdx'.split(
-    ' ',
-  )
-
-export interface SMapFeature {
-  SmapEntryID: string
-  QryContigID: string
-  RefcontigID1: string
-  RefcontigID2: string
-  QryStartPos: string
-  QryEndPos: string
-  RefStartPos: string
-  RefEndPos: string
-  Confidence: string
-  Type: string
-  XmapID1: string
-  XmapID2: string
-  LinkID: string
-  QryStartIdx: string
-  QryEndIdx: string
-  RefStartIdx: string
-  RefEndIdx: string
-  seq_id: string
-  start: number
-  end: number
-  type: string
-  attributes: { ID: string }
-}
-
-export function parseSMAPLine(line: string) {
+export function parseSMapLine(line: string) {
   var f = line.split('\t')
-  var parsed = {} as Record<string, any>
-  for (var i = 0; i < smap_field_names.length; i++) {
-    parsed[smap_field_names[i]] = f[i]
+
+  return {
+    smal_entry_id: f[0],
+    qry_contig_id: f[1],
+    ref_contig_id1: f[2],
+    ref_contig_id2: f[3],
+    qry_start_pos: f[4],
+    qry_end_pos: f[5],
+    ref_start_pos: f[6],
+    ref_end_pos: f[7],
+    confidence: +f[8],
+    xmap_id1: f[10],
+    xmap_id2: f[11],
+    link_id: f[12],
+    qey_start_idx: f[13],
+    qry_end_idx: f[14],
+    ref_start_idx: f[15],
+    ref_end_idx: f[16],
+    refName: f[2],
+    start: +f[6],
+    end: +f[7],
+    type: f[9],
+    id: 'SV_' + f[0],
   }
-  parsed.seq_id = f[2]
-  parsed.start = parseInt(f[6])
-  parsed.end = parseInt(f[7])
-  parsed.type = f[9]
-  parsed.attributes = { ID: ['SV_' + f[0]] }
-
-  return parsed as SMapFeature
 }
-// var cmap_field_names =
-//   'cmap_id contig_length num_sites site_id label_channel position std_dev coverage occurence'.split(
-//     ' ',
-//   )
 
-export interface CMapFeature {
-  cmap_id: string
-  contig_length: number
-  num_sites: number
-  site_id: string
-  label_channel: string
-  position: number
-  std_dev: number
-  coverage: number
-  occurence: number
-}
-export function parseCMAPLine(line: string): CMapFeature {
+export function parseCMapLine(line: string) {
   var f = line.split('\t')
 
   return {
@@ -121,3 +87,7 @@ export function parseCMAPLine(line: string): CMapFeature {
     occurence: +f[8],
   }
 }
+
+export type XMapFeature = ReturnType<typeof parseXMapLine>
+export type SMapFeature = ReturnType<typeof parseSMapLine>
+export type CMapFeature = ReturnType<typeof parseCMapLine>

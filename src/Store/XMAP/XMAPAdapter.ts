@@ -1,18 +1,24 @@
 import { BaseFeatureDataAdapter } from '@jbrowse/core/data_adapters/BaseAdapter'
-import { Feature, Region } from '@jbrowse/core/util'
+import {
+  doesIntersect2,
+  Feature,
+  Region,
+  SimpleFeature,
+} from '@jbrowse/core/util'
 import { openLocation } from '@jbrowse/core/util/io'
 import { ObservableCreate } from '@jbrowse/core/util/rxjs'
 import {
-  parseSMAPLine,
-  parseXMapFeature,
-  parseCMAPLine,
+  parseSMapLine,
+  parseXMapLine,
+  parseCMapLine,
   XMapFeature,
   SMapFeature,
   CMapFeature,
 } from '../util'
+import { cigarToMismatches, parseCigar } from './util'
 
 interface BareFeature {
-  seq_id: string
+  refName: string
   start: number
   [key: string]: unknown
 }
@@ -56,6 +62,7 @@ export default class XMAPAdapter extends BaseFeatureDataAdapter {
   }
 
   refSeqs: Record<string, unknown> = {}
+  p?: Promise<any>
 
   async loadQCMap() {
     const data = await openLocation(this.getConf('qcmapLocation')).readFile(
@@ -66,7 +73,7 @@ export default class XMAPAdapter extends BaseFeatureDataAdapter {
       .split('\n')
       .filter(f => !!f && !f.startsWith('#'))
       .forEach(line => {
-        const feature = parseCMAPLine(line)
+        const feature = parseCMapLine(line)
         const { cmap_id, site_id } = feature
         if (!qcMap[cmap_id]) {
           qcMap[cmap_id] = {} as Record<string, CMapFeature>
@@ -76,7 +83,7 @@ export default class XMAPAdapter extends BaseFeatureDataAdapter {
     return qcMap
   }
 
-  async loadSmap() {
+  async loadSMap() {
     const data = await openLocation(this.getConf('smapLocation')).readFile(
       'utf8',
     )
@@ -86,15 +93,15 @@ export default class XMAPAdapter extends BaseFeatureDataAdapter {
       .filter(f => !!f)
       .filter(f => !f.startsWith('#'))
       .forEach(line => {
-        const feature = parseSMAPLine(line)
+        const feature = parseSMapLine(line)
 
         //Store this information in a map as subfeatures.
         //// may not need below line CMD
-        feature.seq_id = this.referenceNames[feature.seq_id]
-        if (!smapBareFeatures[feature.seq_id]) {
-          smapBareFeatures[feature.seq_id] = [] as SMapFeature[]
+        feature.refName = this.referenceNames[feature.refName]
+        if (!smapBareFeatures[feature.refName]) {
+          smapBareFeatures[feature.refName] = [] as SMapFeature[]
         }
-        smapBareFeatures[feature.seq_id].push(feature)
+        smapBareFeatures[feature.refName].push(feature)
       })
     return smapBareFeatures
   }
@@ -108,7 +115,7 @@ export default class XMAPAdapter extends BaseFeatureDataAdapter {
       .split('\n')
       .filter(f => !!f && !f.startsWith('#'))
       .forEach(line => {
-        const feature = parseCMAPLine(line)
+        const feature = parseCMapLine(line)
         const { cmap_id, site_id } = feature
         if (!rcMap[cmap_id]) {
           rcMap[cmap_id] = {} as Record<string, RcFeature>
@@ -125,7 +132,7 @@ export default class XMAPAdapter extends BaseFeatureDataAdapter {
     return rcMap
   }
 
-  async parseXmap() {
+  async parseXMapPre() {
     const features = [] as { name: string }[]
     const featureMap = {} as Record<string, XMapFeature>
     const data = await openLocation(this.getConf('xmapLocation')).readFile(
@@ -138,92 +145,105 @@ export default class XMAPAdapter extends BaseFeatureDataAdapter {
       .filter(f => !!f)
       .filter(f => !f.startsWith('#'))
       .forEach(line => {
-        const feature = parseXMapFeature(line)
-        if (!featureMap[feature.name]) {
-          featureMap[feature.name] = feature
-        }
+        const feature = parseXMapLine(line)
+        features.push(feature)
+        // if (!featureMap[feature.name]) {
+        //   featureMap[feature.name] = feature
+        // }
         //Combine them
-        const oldFeature = featureMap[feature.name]
-        if (feature.Confidence >= oldFeature.Confidence) {
-          featureMap[feature.name] = feature
-          const f2 = this._labelData(feature, qcMap)
-          let map = f2.subfeatures[0].map
-          let refSub = rcMap[f2.seq_id][map.ref]
-          let start = 1
-          while (!refSub && start < f2.subfeatures.length) {
-            map = f2.subfeatures[start].map
-            refSub = rcMap[f2.seq_id][map.ref]
-            start++
-          }
-          const queSub = f2.subfeatures.find(f => f.name === map.query)
+        // const oldFeature = featureMap[feature.name]
+        // if (feature.confidence >= oldFeature.confidence) {
+        //   featureMap[feature.name] = feature
+        //   const f2 = this._labelData(feature, qcMap)
+        //   let map = f2.subfeatures[0].map
+        //   let refSub = rcMap[f2.refName][map.ref]
+        //   let start = 1
+        //   while (!refSub && start < f2.subfeatures.length) {
+        //     map = f2.subfeatures[start].map
+        //     refSub = rcMap[f2.refName][map.ref]
+        //     start++
+        //   }
+        //   const queSub = f2.subfeatures.find(f => f.name === map.query)
 
-          if (refSub && queSub) {
-            const plstart = +refSub.start
-            const elt = qcMap[f2.name]
+        //   if (refSub && queSub) {
+        //     const plstart = +refSub.start
+        //     const elt = qcMap[f2.name]
 
-            if (f2.strand === '+') {
-              // The query start is from the first label backwards.
-              f2.start = plstart - queSub.position
-              f2.end = f2.start + queSub.contig_length
-              const matches = {} as Record<string, unknown>
-              for (let i = 0; i < f2.subfeatures.length; i++) {
-                matches[f2.subfeatures[i].name] = true
-              }
+        //     if (f2.strand === '+') {
+        //       // The query start is from the first label backwards.
+        //       f2.start = plstart - queSub.position
+        //       f2.end = f2.start + queSub.contig_length
+        //       const matches = {} as Record<string, unknown>
+        //       for (let i = 0; i < f2.subfeatures.length; i++) {
+        //         matches[f2.subfeatures[i].name] = true
+        //       }
 
-              // @ts-expect-error
-              f2.subfeatures = Object.values(elt).map(subf => {
-                const start = f2.start + subf.position
+        //       f2.subfeatures = []
+        //       Object.values(elt).map(subf => {
+        //         const start = f2.start + subf.position
 
-                return {
-                  // @ts-expect-error
-                  refName: subf.seq_id,
-                  name: subf.site_id,
-                  type: matches[subf.site_id] ? subf.label_channel : 'nomatch',
-                  start,
-                  end: start + 7,
-                }
-              })
-            } else {
-              const startOffset =
-                queSub.contig_length -
-                elt['1'].position -
-                elt[queSub.num_sites].position
+        //         return {
+        //           // @ts-expect-error
+        //           refName: subf.refName,
+        //           name: subf.site_id,
+        //           type: matches[subf.site_id] ? subf.label_channel : 'nomatch',
+        //           start,
+        //           end: start + 7,
+        //         }
+        //       })
+        //     } else {
+        //       const startOffset =
+        //         queSub.contig_length -
+        //         elt['1'].position -
+        //         elt[queSub.num_sites].position
 
-              f2.start = plstart - startOffset
-              f2.end = f2.start + queSub.contig_length
-              const matches = {} as Record<string, boolean>
-              for (let i = 0; i < f2.subfeatures.length; i++) {
-                matches[f2.subfeatures[i].name] = true
-              }
+        //       f2.start = plstart - startOffset
+        //       f2.end = f2.start + queSub.contig_length
+        //       const matches = {} as Record<string, boolean>
+        //       for (let i = 0; i < f2.subfeatures.length; i++) {
+        //         matches[f2.subfeatures[i].name] = true
+        //       }
 
-              // @ts-expect-error
-              f2.subfeatures = Object.values(elt).map(subf => {
-                const start = f2.start + startOffset + f2.qstart - subf.position
+        //       f2.subfeatures = []
+        //       Object.values(elt).map(subf => {
+        //         const start = f2.start + startOffset + f2.qstart - subf.position
 
-                return {
-                  // @ts-expect-error
-                  refName: subf.seq_id,
-                  name: subf.site_id,
-                  type: matches[subf.site_id] ? subf.label_channel : 'nomatch',
-                  start,
-                  end: start + 7,
-                }
-              })
-            }
-          }
-          const idx = features.findIndex(f => f.name === f2.name)
-          if (idx !== -1) {
-            features.splice(idx, 1, f2)
-          }
-        }
+        //         return {
+        //           // @ts-expect-error
+        //           refName: subf.refName,
+        //           name: subf.site_id,
+        //           type: matches[subf.site_id] ? subf.label_channel : 'nomatch',
+        //           start,
+        //           end: start + 7,
+        //         }
+        //       })
+        //     }
+        //   }
+        // const idx = features.findIndex(f => f.name === f2.name)
+        // if (idx !== -1) {
+        //   features.splice(idx, 1, f2)
+        // } else {
+        //   features.push(f2)
+        // }
+        // }
       })
     return features
   }
 
+  async parseXMap() {
+    if (!this.p) {
+      this.p = this.parseXMapPre().catch(e => {
+        this.p = undefined
+        throw e
+      })
+    }
+    return this.p
+  }
+
   compareFeatureData(a: BareFeature, b: BareFeature) {
-    if (a.seq_id < b.seq_id) {
+    if (a.refName < b.refName) {
       return -1
-    } else if (a.seq_id > b.seq_id) {
+    } else if (a.refName > b.refName) {
       return 1
     } else {
       return a.start - b.start
@@ -231,21 +251,32 @@ export default class XMAPAdapter extends BaseFeatureDataAdapter {
   }
 
   async getRefNames() {
-    return []
+    const features = await this.parseXMap()
+    return [...new Set<string>(features.map((f: any) => f.correctedRefName))]
   }
 
   getFeatures(region: Region & { originalRefName?: string }) {
     return ObservableCreate<Feature>(async observer => {
-      const features = await this.parseXmap()
-      console.log({ features })
+      const features = await this.parseXMap()
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      features.forEach((data: any, i: any) => {
+        if (
+          data.correctedRefName === region.refName &&
+          doesIntersect2(data.start, data.end, region.start, region.end)
+        ) {
+          observer.next(
+            new SimpleFeature({
+              data: {
+                ...data,
+                mismatches: cigarToMismatches(parseCigar(data.CIGAR)),
+              },
+              id: `${this.id}_map_${i}`,
+            }),
+          )
+        }
+      })
       observer.complete()
     })
-    // fetch features CMD
-    // search in this.features, which are sorted
-    // by ref and start coordinate, to find the beginning of the
-    // relevant range
-    // fix CMD
-    // observer.next(f)
   }
 
   _labelData(f: XMapFeature, qcMap: QCMap) {
@@ -271,7 +302,7 @@ export default class XMAPAdapter extends BaseFeatureDataAdapter {
             }
           }
           return {
-            seq_id: f.seq_id,
+            refName: f.refName,
             position: elt.position,
             num_sites: elt.num_sites,
             contig_length: elt.contig_length,
