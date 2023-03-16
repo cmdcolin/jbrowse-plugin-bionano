@@ -22,6 +22,9 @@
 
 export function parseXMapFeature(line: string) {
   var f = line.split('\t')
+  if (!f[1]) {
+    console.log(line)
+  }
 
   return {
     seq_id: f[2],

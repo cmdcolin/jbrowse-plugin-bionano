@@ -8,6 +8,7 @@ export default class BioNanoPlugin extends Plugin {
   version = version
 
   install(pluginManager: PluginManager) {
+    console.log('t1')
     XMAPAdapterF(pluginManager)
   }
 }

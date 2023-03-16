@@ -1,6 +1,7 @@
-import { BaseAdapter } from '@jbrowse/core/data_adapters/BaseAdapter'
-import { Region, SimpleFeature } from '@jbrowse/core/util'
+import { BaseFeatureDataAdapter } from '@jbrowse/core/data_adapters/BaseAdapter'
+import { Feature, Region } from '@jbrowse/core/util'
 import { openLocation } from '@jbrowse/core/util/io'
+import { ObservableCreate } from '@jbrowse/core/util/rxjs'
 import {
   parseSMAPLine,
   parseXMapFeature,
@@ -24,9 +25,9 @@ interface RcFeature {
   site_id: string
 }
 
-export default class XMAPAdapter extends BaseAdapter {
-  molecule: unknown
-  features: SimpleFeature[] = []
+type QCMap = Record<string, Record<string, CMapFeature>>
+
+export default class XMAPAdapter extends BaseFeatureDataAdapter {
   referenceNames: Record<string, string> = {
     1: 'chr1',
     2: 'chr2',
@@ -54,38 +55,33 @@ export default class XMAPAdapter extends BaseAdapter {
     24: 'chrY',
   }
 
-  getMolecule() {
-    return this.molecule
-  }
-
   refSeqs: Record<string, unknown> = {}
-  rcBareFeatures: Record<string, Record<string, RcFeature>> = {}
-  smapBareFeatures: Record<string, SMapFeature[]> = {}
-  qcBareFeatures: Record<string, Record<string, CMapFeature>> = {}
 
-  async _loadFeatures() {
+  async loadQCMap() {
     const data = await openLocation(this.getConf('qcmapLocation')).readFile(
       'utf8',
     )
-    return data
+    const qcMap: QCMap = {}
+    data
       .split('\n')
-      .filter(f => !!f)
-      .filter(f => !f.startsWith('#'))
+      .filter(f => !!f && !f.startsWith('#'))
       .forEach(line => {
         const feature = parseCMAPLine(line)
         const { cmap_id, site_id } = feature
-        if (!this.qcBareFeatures[cmap_id]) {
-          this.qcBareFeatures[cmap_id] = {} as Record<string, CMapFeature>
+        if (!qcMap[cmap_id]) {
+          qcMap[cmap_id] = {} as Record<string, CMapFeature>
         }
-        this.qcBareFeatures[cmap_id][site_id] = feature
+        qcMap[cmap_id][site_id] = feature
       })
+    return qcMap
   }
 
-  async _smapParser() {
+  async loadSmap() {
     const data = await openLocation(this.getConf('smapLocation')).readFile(
       'utf8',
     )
-    return data
+    const smapBareFeatures: Record<string, SMapFeature[]> = {}
+    data
       .split('\n')
       .filter(f => !!f)
       .filter(f => !f.startsWith('#'))
@@ -95,29 +91,30 @@ export default class XMAPAdapter extends BaseAdapter {
         //Store this information in a map as subfeatures.
         //// may not need below line CMD
         feature.seq_id = this.referenceNames[feature.seq_id]
-        if (!this.smapBareFeatures[feature.seq_id]) {
-          this.smapBareFeatures[feature.seq_id] = [] as SMapFeature[]
+        if (!smapBareFeatures[feature.seq_id]) {
+          smapBareFeatures[feature.seq_id] = [] as SMapFeature[]
         }
-        this.smapBareFeatures[feature.seq_id].push(feature)
+        smapBareFeatures[feature.seq_id].push(feature)
       })
+    return smapBareFeatures
   }
 
-  async _rcMapParser() {
+  async loadRCMap() {
     const data = await openLocation(this.getConf('rcmapLocation')).readFile(
       'utf8',
     )
-    return data
+    const rcMap: Record<string, Record<string, RcFeature>> = {}
+    data
       .split('\n')
-      .filter(f => !!f)
-      .filter(f => !f.startsWith('#'))
+      .filter(f => !!f && !f.startsWith('#'))
       .forEach(line => {
         const feature = parseCMAPLine(line)
         const { cmap_id, site_id } = feature
-        if (!this.rcBareFeatures[cmap_id]) {
-          this.rcBareFeatures[cmap_id] = {} as Record<string, RcFeature>
+        if (!rcMap[cmap_id]) {
+          rcMap[cmap_id] = {} as Record<string, RcFeature>
         }
 
-        this.rcBareFeatures[cmap_id][site_id] = {
+        rcMap[cmap_id][site_id] = {
           refName: feature.cmap_id,
           start: +feature.position,
           end: +feature.position + 7,
@@ -125,15 +122,17 @@ export default class XMAPAdapter extends BaseAdapter {
           site_id: feature.site_id,
         }
       })
+    return rcMap
   }
 
-  async _xMapParser() {
+  async parseXmap() {
     const features = [] as { name: string }[]
     const featureMap = {} as Record<string, XMapFeature>
     const data = await openLocation(this.getConf('xmapLocation')).readFile(
       'utf8',
     )
-
+    const qcMap = await this.loadQCMap()
+    const rcMap = await this.loadRCMap()
     data
       .split('\n')
       .filter(f => !!f)
@@ -147,23 +146,24 @@ export default class XMAPAdapter extends BaseAdapter {
         const oldFeature = featureMap[feature.name]
         if (feature.Confidence >= oldFeature.Confidence) {
           featureMap[feature.name] = feature
-          const f2 = this._labelData(feature)
+          const f2 = this._labelData(feature, qcMap)
           let map = f2.subfeatures[0].map
-          let refSub = this.rcBareFeatures[f2.seq_id][map.ref]
+          let refSub = rcMap[f2.seq_id][map.ref]
           let start = 1
           while (!refSub && start < f2.subfeatures.length) {
             map = f2.subfeatures[start].map
-            refSub = this.rcBareFeatures[f2.seq_id][map.ref]
+            refSub = rcMap[f2.seq_id][map.ref]
             start++
           }
           const queSub = f2.subfeatures.find(f => f.name === map.query)
 
           if (refSub && queSub) {
             const plstart = +refSub.start
-            const elt = this.qcBareFeatures[f2.name]
+            const elt = qcMap[f2.name]
 
             if (f2.strand === '+') {
-              f2.start = plstart - queSub.position // The query start is from the first label backwards.
+              // The query start is from the first label backwards.
+              f2.start = plstart - queSub.position
               f2.end = f2.start + queSub.contig_length
               const matches = {} as Record<string, unknown>
               for (let i = 0; i < f2.subfeatures.length; i++) {
@@ -210,19 +210,10 @@ export default class XMAPAdapter extends BaseAdapter {
                 }
               })
             }
-            for (let i = 0; features && i < features.length; i++) {
-              if (features[i].name === f2.name) {
-                features.splice(i)
-              }
-            }
-            features.push(f2)
-          } else {
-            for (let i = 0; i < features.length; i++) {
-              if (features[i].name === feature.name) {
-                features.splice(i)
-              }
-            }
-            features.push(feature)
+          }
+          const idx = features.findIndex(f => f.name === f2.name)
+          if (idx !== -1) {
+            features.splice(idx, 1, f2)
           }
         }
       })
@@ -239,7 +230,16 @@ export default class XMAPAdapter extends BaseAdapter {
     }
   }
 
-  async _getFeatures(query: Region) {
+  async getRefNames() {
+    return []
+  }
+
+  getFeatures(region: Region & { originalRefName?: string }) {
+    return ObservableCreate<Feature>(async observer => {
+      const features = await this.parseXmap()
+      console.log({ features })
+      observer.complete()
+    })
     // fetch features CMD
     // search in this.features, which are sorted
     // by ref and start coordinate, to find the beginning of the
@@ -248,16 +248,17 @@ export default class XMAPAdapter extends BaseAdapter {
     // observer.next(f)
   }
 
-  _labelData(f: XMapFeature) {
+  _labelData(f: XMapFeature, qcMap: QCMap) {
     return {
       ...f,
-      subfeatures: f.alignment
-        .split(')')
-        .map(alignment => {
-          const tokens = alignment.substring(1).split(',')
-          const ref = tokens[0]
-          const query = tokens[1]
-          const elt = this.qcBareFeatures[f.query_contig_id][query]
+      // matchAll is reasonably fast https://jsperf.app/zavake/1/preview
+      subfeatures: [...f.alignment.matchAll(/\(([0-9]+),([0-9]+)\)/g)]
+        .map(([, ref, query]) => {
+          const elt = qcMap[f.query_contig_id][query]
+          if (!elt) {
+            console.log({ query, contig_id: f.query_contig_id })
+            throw new Error('wow')
+          }
 
           let start = f.start
           if (f.strand === '-') {
@@ -273,7 +274,7 @@ export default class XMAPAdapter extends BaseAdapter {
             seq_id: f.seq_id,
             position: elt.position,
             num_sites: elt.num_sites,
-            contig_length: +elt.contig_length,
+            contig_length: elt.contig_length,
             name: elt.site_id,
             type: elt.label_channel,
             start,
