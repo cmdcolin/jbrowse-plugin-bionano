@@ -6,3 +6,7 @@ WIP plugin for displaying bionano data
 
 Uses some code from https://github.com/bionanogenomics/JBrowsePlugin/ licensed
 MIT
+
+## Screenshots
+
+![](img/1.png)
