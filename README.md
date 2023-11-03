@@ -1,6 +1,8 @@
 # jbrowse-plugin-bionano
 
-WIP plugin for displaying bionano data
+WIP plugin for displaying bionano data.
+
+After this experiment, I think bionano data should be transformed into a SAM/BAM/CRAM or PAF style format instead of using this technique. Contact me if there are any questions.
 
 ## Note
 
